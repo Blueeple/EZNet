@@ -1,0 +1,14 @@
+{
+    "name": "EZNet",
+    "tree": {
+        "$className": "DataModel",
+
+        "ServerScriptService": {
+            "$className": "ServerScriptService",
+
+            "EZNet_Installer": {
+                "$path": "src"
+            }
+        }
+    }
+}

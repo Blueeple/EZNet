@@ -19,9 +19,9 @@ local LocalPlayer = Players.LocalPlayer :: Player
 local PlayerVerifyRemote = ReplicatedStorage:WaitForChild("PlayerVerify") :: RemoteEvent
 
 -- Modules
-local DataTypes = require(ReplicatedStorage:WaitForChild("EZN-Types"))
-local GoodSignal = require(ReplicatedStorage.Frameworks:WaitForChild("GoodSignal"))
 local Types = require(script.Types)
+local DataTypes = require(ReplicatedStorage:WaitForChild("EZN_Types")) :: Types.EZN_Types
+local GoodSignal = require(script.GoodSignal)
 
 -- Object oriented module constructor
 local EZNet = {}

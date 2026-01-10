@@ -21,8 +21,8 @@ local PacketCreateYeildTask: thread
 local PlayerVerifyRemote: RemoteEvent
 
 -- Modules
-local DataTypes = require(ReplicatedStorage:WaitForChild("EZN-Types"))
-local GoodSignal = require(ReplicatedStorage.Frameworks:WaitForChild("GoodSignal"))
+local DataTypes = require(script.Parent.EZN_Types)
+local GoodSignal = require(script.GoodSignal)
 local Types = require(script.Types)
 
 -- Object oriented module constructor
@@ -35,7 +35,7 @@ EZNet.Engine = {
 		Tables = {},
 		Arrays = {},
 	},
-	Replicators = {
+	Replicators = { -- Here are replicators, most of these setting currently do nothing but will be in the future.
 		PlayerVerify = {
 			StepMode = RunService.Heartbeat,
 		},
@@ -64,20 +64,17 @@ EZNet.Engine = {
 			OutBoundQueue: { [number]: { Player: Player, Buffer: buffer | any } },
 		},
 	},
-	PacketObjectEngine = {},
 	Settings = {
 		DebugMode = false,
 		BypassPacketIntegrity = false,
 		StudioKickEnabled = false,
 		MaxBufferSize = 256,
-		ProcessPacketOnFire = false, -- Will be added in rmv4.1
-		SkipReplicatorOutboundQueue = false, -- Will be added in rmv4.1
-		EngineYieldTime = if RunService:IsStudio() then 30 else 15,
-		MaxCompileTime = 0.05,
+		ProcessPacketOnFire = false, -- Will be added in EZNet V1.3
+		SkipReplicatorOutboundQueue = false, -- Will be added in EZNet V1.3
+		EngineYieldTime = if RunService:IsStudio() then 15 else 10,
+		MaxCompileTime = 0.015,
 	},
 }
-EZNet.Engine.PacketObjectEngine.__index = EZNet.Engine.PacketObjectEngine
-ObjectEngine = EZNet.Engine.PacketObjectEngine
 
 -- [[ Debug Engine]]
 --[=[
@@ -637,7 +634,7 @@ end
 	@return PacketObjectEngine
 ]=]
 function EZNet.GetPacket(Name: string)
-	if PacketDataLoaded then
+	if PacketDataLoaded or RequestPacketByName(Name) then
 		-- Start variables
 		local Packet, PacketId = RequestPacketByName(Name)
 

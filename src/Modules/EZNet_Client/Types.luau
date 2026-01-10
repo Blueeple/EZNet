@@ -36,4 +36,11 @@ export type PacketObjectEngine = {
 	PacketId: number,
 }
 
+export type EZN_Types = {
+	Types: { [string]: string },
+	Reads: { [string]: (Value: buffer) -> ...any },
+	Writes: { [string]: (Value: any) -> ...any },
+	Settings: {},
+}
+
 return {}

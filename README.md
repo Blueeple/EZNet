@@ -1,7 +1,7 @@
 
-# EZNet V1
+# EZNet Beta V1 - Independent
 
-🚀EZNet another Roblox oop based networking module.
+🚀EZNet a DOP based Roblox networking module.
 
 🐛This is a Beta bugs are to be expected.
 
@@ -21,25 +21,22 @@
 
 #### Will EZNet get a better installation process? Eg: [Wally](https://wally.run)
 
-Yes, but not at this time.
+Yes, but may reqiure the use of 2 wally install parameters, and Potentially a Plugin installer. 👀
 
 #### Will EZNet get better optimization
 
-Yes, but only from your feedback
+Yes, I'm aware of some performance issues and those will be fixed overtime.
 
 #### Does EZNet support Remote functions?
 
-No, It might never get added.
+No, I'll think about adding it.
 
-#### Why does the `:BlockPlayer()` and `:UnBlockPlayer()` functions not work?
-
-I didn't finish them but I just wanted something to publish to github.
 ## API Reference
 
 #### Creating a packet
 
 ```http
-  EZnetServer:CreatePacket("Packet", true, "Reliable", { "Boolean" })
+  EZnetServer.CreatePacket("Name", true, "Reliable", { "Boolean" })
 ```
 
 | Parameter | Type     | Description                       |
