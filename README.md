@@ -1,5 +1,5 @@
 
-# EZNet Beta V1 - Independent
+# EZNet V1.1b - Independent
 
 🚀EZNet a DOP based Roblox networking module.
 
@@ -19,17 +19,20 @@
 
 ## FAQ
 
-#### Will EZNet get a better installation process? Eg: [Wally](https://wally.run)
+#### Why does EZNet behave's funky at times?
 
-Yes, but may reqiure the use of 2 wally install parameters, and Potentially a Plugin installer. 👀
+EZNet was built in a way were you must define remotes and call `EZNet.GetPacket("Packet")` after initialization, but I'm working on addding proper **Async** functions.
 
-#### Will EZNet get better optimization
+#### Will EZNet get better optimizations (Eg: Native event connections, instead of goodSignal)
 
-Yes, I'm aware of some performance issues and those will be fixed overtime.
+Yes, these changes will come over time.
 
 #### Does EZNet support Remote functions?
 
-No, I'll think about adding it.
+Yes, these are plannd but they would most likely be emulated using remote events.
+
+#### Will EZNet get a automatic RBXType to Buffer system like blink?
+Yes, but not at this time we have bigger fish to fry.
 
 ## API Reference
 
