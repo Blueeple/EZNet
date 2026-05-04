@@ -1,0 +1,8 @@
+{
+    "version": "0.1.0a",
+    "versionChannel": "alpha",
+    "vendor": "Blueeple",
+    "repository": "https://github.com/Blueeple/EZNet",
+    "isWallyVersion": false,
+    "isFork": false
+}

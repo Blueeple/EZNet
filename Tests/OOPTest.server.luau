@@ -1,8 +1,11 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local EZNet_Server = require(ServerScriptService.EZNet_Installer.EZNet.EZNetServer)
 
-local obj1 = EZNet_Server.new("Hello")
-local obj2 = EZNet_Server.new("World!")
-
-EZNet_Server.new("Test")
-EZNet_Server.setEnabled(obj1, false)
+EZNet_Server.newChannel("Test", false)
+local packet1 = EZNet_Server.newPacket("Packet1", {
+    Enabled = false,
+    Channel = "Test",
+    Types = { "string", "number" },
+})
+EZNet_Server.setEnabled(packet1, true)
+EZNet_Server.readEngineMemory()
