@@ -61,6 +61,7 @@ type object = {
 	channel: string,
 	types: { string },
 	blockedPlayers: { number },
+	signalName: string,
 }
 type EZN_PacketData = {
 	name: string,
@@ -144,22 +145,34 @@ type GithubVersionInfo = {
 	isFork: boolean,
 }
 
+type Connection = {
+	Connected: boolean,
+	_isOnce: boolean,
+	_function: (...any) -> any,
+}
+
 -- [ SETTINGS ]
 local EZNSettings = {
+	-- [ Engine Settings ]
 	checkForUpdates = true, -- Checks for updates on the github repo and warns if there is an update available and only works when in studio. Default [true]
 	debugMode = RunService:IsStudio(), -- Prints debug information about the engine, such as when objects are created, enabled, disabled, and when updates are checked for. Default [RunService:IsStudio()]
 	githubRepository = "https://github.com/Blueeple/EZNet", -- The github repository URL for the engine, or your specific engine fork. Default ["https://github.com/Blueeple/EZNet"]
 	paradigmMode = "dod", -- Can only be "OOP" or "DOD" default ["DOD"] not setting this properly WILL cause certain contructors to NOT works. default ["DOD"]
 	updateRetryTime = 2, -- Time in seconds between update checks when an update is available, default [2]
 	updateMaxRetries = 5, -- Maximum number of retries for update checks when an update is available, default [5]
-	versionChannel = "alpha", -- The version channel of the engine, used for update checking. Default ["alpha"]
+	versionChannel = "InDev", -- The version channel of the engine, used for update checking. Default ["InDev"]
 	isWallyVersion = false, -- Whether this version of the engine is a wally version, used for update checking. Default [false] (I BEG YALL DO NOT CHANGE THIS TO TRUE UNLESS YOU KNOW WHAT YOU ARE DOING)
 	isFork = false, -- Whether this version of the engine is a fork, used for update checking. Default [false] (AGAIN I BEG YALL DO NOT CHANGE THIS TO TRUE UNLESS YOU KNOW WHAT YOU ARE DOING)
+	-- [ Signal Settings ]
+	yeildTime = 0.2,
 }
 type EZNet_TypeMode = EZN_VersionDOD -- By changing this to either "EZN_VersionDOD" or "EZN_VersionOOP" you can allow type annotations t, Default ["EZN_VersionDOD"]
 
 -- [ Memory ]
-local currentVersion = "0.1.0a" -- The current version of the engine, used for update checking.
+local currentVersion = "0.1.0dev" -- The current version of the engine, used for update checking. (NO NOT CHANGE THIS UNLESS YOU KNOW WHAT YOU ARE DOING)
+local ezsignal = {}
+ezsignal._listeners = {} :: { [string]: { Connection } }
+ezsignal._functionMap = {} :: { [() -> ()]: { string } }
 local GlobalMemory = {
 	Packets = {} :: { [number]: object },
 	NameMap = {} :: { [string]: number },
@@ -210,6 +223,7 @@ local Utils = {
 						warn(
 							`[EZNet][Update] - Update available! Current version: {currentVersion}, Latest version: {latestVersion}. Please update at {EZNSettings.githubRepository}`
 						)
+						-- Maybe I add a way to contact the plugin to prompt an update in the future, but for now it will just print a warning in the console.
 					else
 						print(`[EZNet][Update] - You are using the latest version: {currentVersion}.`)
 					end
@@ -241,6 +255,169 @@ local Utils = {
 		end
 	end,
 }
+-- [ EZSignal EMBEDDED CODE ]
+function ezsignal.newSignal(Name: string)
+	if ezsignal._listeners[Name] then
+		warn(`[{script.Name}] - listener {Name} already exists!`)
+		return false
+	end
+
+	ezsignal._listeners[Name] = {}
+	return true
+end
+
+function ezsignal.destroy(Name: string)
+	local listeners = ezsignal._listeners[Name]
+
+	if not listeners then
+		warn(`[{script.Name}] - listener {Name} does not exist!`)
+		return
+	end
+
+	for _, connection in listeners do
+		connection.Connected = false
+
+		local map = ezsignal._functionMap[connection._function]
+		if map then
+			local index = table.find(map, Name)
+			if index then
+				table.remove(map, index)
+			end
+
+			if #map == 0 then
+				ezsignal._functionMap[connection._function] = nil
+			end
+		end
+	end
+
+	ezsignal._listeners[Name] = nil
+end
+
+function ezsignal.bindToSignal(Name: string, _func: (...any) -> any, once: boolean?)
+	local listener = ezsignal._listeners[Name]
+
+	if not listener then
+		error(`[{script.Name}] - listener {Name} does not exist!`)
+	end
+
+	local connection: Connection = {
+		Connected = true,
+		_isOnce = once or false,
+		_function = _func,
+	}
+
+	local map = ezsignal._functionMap[_func]
+
+	if not map then
+		map = {}
+		ezsignal._functionMap[_func] = map
+	end
+
+	table.insert(listener, connection)
+	table.insert(map, Name)
+
+	return connection
+end
+
+function ezsignal.bindToSignalAsync(Name: string, _func: () -> (), once: boolean?)
+	local start = os.clock()
+
+	while not ezsignal._listeners[Name] do
+		if os.clock() - start > EZNSettings.yeildTime then
+			error(`[{script.Name}] - yeild passed for listener {Name}`)
+		end
+
+		task.wait()
+	end
+
+	return ezsignal.bindToSignal(Name, _func, once)
+end
+
+function ezsignal.unbindFromSignal(Name: string, _func: () -> (), unbindAll: boolean?)
+	local listener = ezsignal._listeners[Name]
+	local map = ezsignal._functionMap[_func]
+
+	if not listener or not map then
+		return
+	end
+
+	for i = #listener, 1, -1 do
+		local connection = listener[i]
+
+		if connection._function == _func then
+			connection.Connected = false
+			table.remove(listener, i)
+
+			local idx = table.find(map, Name)
+			if idx then
+				table.remove(map, idx)
+			end
+
+			if not unbindAll then
+				break
+			end
+		end
+	end
+
+	if #map == 0 then
+		ezsignal._functionMap[_func] = nil
+	end
+end
+
+function ezsignal.fireSignal(Name: string, ...)
+	local listener = ezsignal._listeners[Name]
+
+	if not listener then
+		warn(`[{script.Name}] - listener {Name} does not exist!`)
+		return
+	end
+
+	for i = #listener, 1, -1 do
+		local connection = listener[i]
+		local listenerIndex = table.find(ezsignal._functionMap[connection._function], Name)
+
+		if connection.Connected then
+			task.spawn(connection._function, ...)
+			if connection._isOnce and listenerIndex then
+				table.remove(listener, i)
+				table.remove(ezsignal._functionMap[connection._function], listenerIndex)
+			end
+		end
+	end
+end
+
+function ezsignal.fireSignalAsync(Name: string, ...)
+	local listener = nil
+	local lastYeild = os.clock()
+	local yeildTime = 0
+
+	repeat
+		listener = ezsignal._listeners[Name]
+		yeildTime += (os.clock() - lastYeild)
+		lastYeild = os.clock()
+		task.wait()
+	until (yeildTime > EZNSettings.yeildTime) or listener
+
+	if listener then
+		for i = #listener, 1, -1 do
+			local connection = listener[i]
+			local listenerIndex = table.find(ezsignal._functionMap[connection._function], Name)
+
+			if connection.Connected then
+				task.spawn(connection._function, ...)
+				if connection._isOnce and listenerIndex then
+					table.remove(listener, i)
+					table.remove(ezsignal._functionMap[connection._function], listenerIndex)
+				end
+			end
+		end
+
+		return
+	else
+		warn(`[{script.Name}] - yeild passed for listener {Name}`)
+		return
+	end
+end
 
 -- [ ENGINE ]
 --[=[
@@ -293,8 +470,10 @@ local function constructObject(name: string, enabled: boolean | EZN_PacketData, 
 		channel = objectChannel,
 		types = objectTypes,
 		blockedPlayers = {},
+		signalName = name .. "_Signal",
 	}
 
+	ezsignal.newSignal(object.signalName)
 	table.insert(GlobalMemory.Packets, object)
 	GlobalMemory.NameMap[name] = packetId
 
@@ -378,6 +557,40 @@ local function unblockPlayer(identity: number | string, player: Player)
 	end
 end
 
+--[=[
+	Recieves a packet and fires the corresponding signal.
+
+	@param packetId: number
+	@param _func: (...any) -> ()
+]=]
+local function recieved(identity: number | string, _func: (...any) -> ())
+	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
+		local signalName = GlobalMemory.Packets[identity].signalName
+		ezsignal.bindToSignal(signalName, _func)
+	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
+		local id = GlobalMemory.NameMap[identity]
+		local signalName = GlobalMemory.Packets[id].signalName
+		ezsignal.bindToSignal(signalName, _func)
+	end
+end
+
+--[=[
+	Recieves a packet and fires the corresponding signal.
+
+	@param packetId: number
+	@param _func: (...any) -> ()
+]=]
+local function recievedOnce(identity: number | string, _func: (...any) -> ())
+	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
+		local signalName = GlobalMemory.Packets[identity].signalName
+		ezsignal.bindToSignal(signalName, _func, true)
+	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
+		local id = GlobalMemory.NameMap[identity]
+		local signalName = GlobalMemory.Packets[id].signalName
+		ezsignal.bindToSignal(signalName, _func, true)
+	end
+end
+
 -- [ METHODS ]
 local methods = {
 	--[[
@@ -399,6 +612,8 @@ local methods = {
 		setEnabled = setObjectEnabled,
 		blockPlayer = blockPlayer,
 		unblockPlayer = unblockPlayer,
+		recieved = recieved,
+		recievedOnce = recievedOnce,
 	} :: EZN_VersionDOD,
 }
 methods.object.__index = methods.object -- This is what sets up the standard OOP __index metamethod for luau
