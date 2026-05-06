@@ -61,22 +61,21 @@ type object = {
 	channel: string,
 	types: { string },
 	blockedPlayers: { number },
-	signalName: string,
 }
 type EZN_PacketData = {
 	name: string,
-	channel: string,
+	channel: BaseRemoteEvent,
 	types: { string },
 	enabled: boolean,
 }
 type EZN_oopMethods = object & {
 	__index: EZN_oopMethods,
-	--[[
+	--[=[
 		Enables or disables the object by id or name.
 
 		@param identity: number | string
 		@param state: boolean
-	]]
+	]=]
 	setEnabled: (_: object, state: boolean) -> (),
 }
 
@@ -87,52 +86,99 @@ type EZN_Debug = {
 		* Debug function, only available when debug mode is enabled.
 	]]
 	readEngineMemory: () -> (),
+	--[=[
+		Reads the EZSignal Embedded memory and prints it to the console.
+	]=]
+	readSignalMemory: () -> (),
 }
 type EZN_VersionDOD = {
-	--[[
+	--[=[
 		Creates a new packet object.
-	]]
-	newPacket: (name: string, enabled: boolean | EZN_PacketData, channel: string?, types: { string }?) -> number,
-	--[[
+
+		@param name: string
+		@param enabled: boolean | EZN_PacketData
+		@param channel: string | BaseRemoteEvent
+		@param types: { string }?
+		
+		@return number
+	]=]
+	newPacket: (name: string, enabled: boolean | EZN_PacketData, channel: string? | BaseRemoteEvent?, types: { string }?) -> number,
+	--[=[
 		Creates a new channel also known as a remote event.
 
 		@param name: string
 		@param unreliable: boolean
-	]]
+	]=]
 	newChannel: (name: string, unreliable: boolean) -> (),
-	--[[
+	--[=[
 		Enables or disables the object by id or name.
 
 		@param identity: number | string
 		@param state: boolean
-	]]
+	]=]
 	setEnabled: (id: number | string, state: boolean) -> (),
-	--[[
+	--[=[
 		Blocks a player from receiving or sending a packet.
 
 		@param identity: number | string
 		@param player: Player
-	]]
+	]=]
 	blockPlayer: (id: number | string, player: Player) -> (),
-	--[[
+	--[=[
 		Unblocks a player from receiving or sending a packet.
 
 		@param identity: number | string
 		@param player: Player
-	]]
+	]=]
 	unblockPlayer: (id: number | string, player: Player) -> (),
+	--[=[
+		Binds a functions to the packet
+
+		@param identity: number | string
+		@param _func: (...any) -> ()
+	]=]
+	bindTo: (identity: number | string, _func: (...any) -> ()) -> (),
+	--[=[
+		Binds a functions to the packet, but only executes the command once.
+
+		@param identity: number | string
+		@param _func: (...any) -> ()
+	]=]
+	bindToOnce: (identity: number | string, _func: (...any) -> ()) -> (),
+	--[=[
+		Fires a packet to the player
+
+		@param player: Player
+		@param ...: any
+	]=]
+	fireToPlayer: (player: Player, ...any) -> (),
+	--[=[
+		Fires a packet all players connected to server-side framework
+
+		@param ...: any
+	]=]
+	fireToAll: (...any) -> (),
+	--[=[
+		Fires a packet all players connected to server-side framework except for the other players specified.
+
+		@param player: Player
+		@param ...: any
+	]=]
+	fireToAllExcept: ({ Player }, ...any) -> (),
 }
 type EZN_VersionOOP = {
-	--[[
+	--[=[
 		Creates a new packet object.
-	]]
+
+
+	]=]
 	newPacket: (name: string, enabled: boolean | EZN_PacketData, channel: string?, types: { string }?) -> EZN_oopMethods,
-	--[[
+	--[=[
 		Creates a new channel also known as a remote event.
 
 		@param name: string
 		@param unreliable: boolean
-	]]
+	]=]
 	newChannel: (name: string, unreliable: boolean) -> (),
 }
 
@@ -177,6 +223,7 @@ local GlobalMemory = {
 	Packets = {} :: { [number]: object },
 	NameMap = {} :: { [string]: number },
 	Channels = {} :: { [string]: BaseRemoteEvent },
+	_RemoteEventConnections = {} :: { [string]: { RBXScriptConnection } },
 }
 
 -- [ Variables ]
@@ -252,6 +299,14 @@ local Utils = {
 	readEngineMemory = function()
 		if EZNSettings.debugMode then
 			print(GlobalMemory)
+		end
+	end,
+	--[=[
+		Reads the EZSignal Embedded memory and prints it to the console.
+	]=]
+	readSignalMemory = function()
+		if EZNSettings.debugMode then
+			print(ezsignal)
 		end
 	end,
 }
@@ -426,14 +481,16 @@ end
 	Not even the OOP wrapper uses the data object, just the id.
 
 	@param name: string
-	@param enabled: boolean
-	@param channel: string
-	@param types: { string }
+	@param enabled: boolean | EZN_PacketData
+	@param channel: string | BaseRemoteEvent
+	@param types: { string }?
+		
+	@return object
 ]=]
-local function constructObject(name: string, enabled: boolean | EZN_PacketData, channel: string?, types: { string }?): object
+local function constructObject(name: string, enabled: boolean | EZN_PacketData, channel: string? | BaseRemoteEvent?, types: { string }?): object
 	local packetId = #GlobalMemory.Packets + 1
 
-	local objectChannel: string = channel or ""
+	local objectRemoteName: string
 	local objectEnabled: boolean
 	local objectTypes: { string } = types :: { string }
 
@@ -446,20 +503,26 @@ local function constructObject(name: string, enabled: boolean | EZN_PacketData, 
 	-- Parse overloads
 	if typeof(enabled) == "boolean" then
 		objectEnabled = enabled
+		objectRemoteName = tostring(channel)
+		Utils.print(`Constructing packet: {name} as arguments`)
 	elseif typeof(enabled) == "table" then
 		local data = enabled :: EZN_PacketData
 
 		objectEnabled = data.enabled
-		objectChannel = data.channel or ""
 		objectTypes = data.types
+		objectRemoteName = tostring(data.channel)
+
+		Utils.print(`Constructing packet: {name} as table`)
 	else
 		Utils.warn("Invalid enabled parameter passed to constructObject")
 		return nil :: any
 	end
 
 	-- Validate channel
-	if objectChannel ~= "" and ChannelStore and not ChannelStore:FindFirstChild(objectChannel) then
-		Utils.warn(`Channel with name "{objectChannel}" does not exist!`)
+	if objectRemoteName == "nil" then
+		Utils.warn(`Invalid channel {objectRemoteName} passed to constructObject: {name}`)
+	elseif not GlobalMemory.Channels[objectRemoteName] then
+		Utils.warn(`Channel {objectRemoteName} does not exist for packet: {name}`)
 		return nil :: any
 	end
 
@@ -467,13 +530,12 @@ local function constructObject(name: string, enabled: boolean | EZN_PacketData, 
 		id = packetId,
 		name = name,
 		enabled = objectEnabled,
-		channel = objectChannel,
+		channel = objectRemoteName,
 		types = objectTypes,
 		blockedPlayers = {},
-		signalName = name .. "_Signal",
 	}
 
-	ezsignal.newSignal(object.signalName)
+	ezsignal.newSignal(name .. "_Signal")
 	table.insert(GlobalMemory.Packets, object)
 	GlobalMemory.NameMap[name] = packetId
 
@@ -563,13 +625,13 @@ end
 	@param packetId: number
 	@param _func: (...any) -> ()
 ]=]
-local function recieved(identity: number | string, _func: (...any) -> ())
+local function bindToPacketRecieve(identity: number | string, _func: (...any) -> ())
 	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
-		local signalName = GlobalMemory.Packets[identity].signalName
+		local signalName = GlobalMemory.Packets[identity].name .. "_Signal"
 		ezsignal.bindToSignal(signalName, _func)
 	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
 		local id = GlobalMemory.NameMap[identity]
-		local signalName = GlobalMemory.Packets[id].signalName
+		local signalName = GlobalMemory.Packets[id].name .. "_Signal"
 		ezsignal.bindToSignal(signalName, _func)
 	end
 end
@@ -580,13 +642,13 @@ end
 	@param packetId: number
 	@param _func: (...any) -> ()
 ]=]
-local function recievedOnce(identity: number | string, _func: (...any) -> ())
+local function bindToPacketRecieve_Once(identity: number | string, _func: (...any) -> ())
 	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
-		local signalName = GlobalMemory.Packets[identity].signalName
+		local signalName = GlobalMemory.Packets[identity].name .. "_Signal"
 		ezsignal.bindToSignal(signalName, _func, true)
 	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
 		local id = GlobalMemory.NameMap[identity]
-		local signalName = GlobalMemory.Packets[id].signalName
+		local signalName = GlobalMemory.Packets[id].name .. "_Signal"
 		ezsignal.bindToSignal(signalName, _func, true)
 	end
 end
@@ -612,8 +674,8 @@ local methods = {
 		setEnabled = setObjectEnabled,
 		blockPlayer = blockPlayer,
 		unblockPlayer = unblockPlayer,
-		recieved = recieved,
-		recievedOnce = recievedOnce,
+		bindTo = bindToPacketRecieve,
+		bindToOnce = bindToPacketRecieve_Once,
 	} :: EZN_VersionDOD,
 }
 methods.object.__index = methods.object -- This is what sets up the standard OOP __index metamethod for luau
@@ -639,14 +701,13 @@ local paragdimConsts = {
 	dod = methods.dataOriented,
 }
 
---[[
-	This is what allows EZNet to support both OOP and DOD by architecture.
-]]
-if paragdimConsts[string.lower(EZNSettings.paradigmMode)] then
+-- [ Initial startup fucntions ]
+local function InitalizeFramework()
 	-- Initialization
 	if EZNSettings.debugMode then
 		Utils.print("Debug mode is enabled, injecting debug functions into the engine.")
 		paragdimConsts[string.lower(EZNSettings.paradigmMode)]["readEngineMemory"] = Utils.readEngineMemory
+		paragdimConsts[string.lower(EZNSettings.paradigmMode)]["readSignalMemory"] = Utils.readSignalMemory
 	end
 	if not ChannelStore then
 		Utils.createChannelStore()
@@ -654,6 +715,13 @@ if paragdimConsts[string.lower(EZNSettings.paradigmMode)] then
 	if EZNSettings.checkForUpdates then
 		Utils.checkForUpdates()
 	end
+end
+
+--[[
+	This is what allows EZNet to support both OOP and DOD by architecture.
+]]
+if paragdimConsts[string.lower(EZNSettings.paradigmMode)] then
+	task.spawn(InitalizeFramework)
 
 	return paragdimConsts[string.lower(EZNSettings.paradigmMode)] :: EZNet_TypeMode & EZN_Debug
 end
