@@ -1,6 +1,3 @@
---!strict
---!native
---!optimize 2
 --[[
 	Welcome to EZNet,
 	You can customize settings and change how the core engine works here and modify it yourself!
@@ -8,9 +5,9 @@
 	Built and scripted by @Blueeple (Bue) on github / RBLX
 
 	Notices:
-	- This is a custom networking engine I fear calling this a library since it is more of a framework, so I call it an engine.
+	- This is a custom networking framework I fear that calling this a library is a bad idea since it is more of a framework, so I call it an framework.
 	It is built from the ground up with custom code and does not use any external libraries or modules, unless said module is 
-	made by me or apart of the "EZ" series of modules, such as "EZSignal" which is a custom DOD native event system built for this engine
+	made by me or apart of the "EZ" libary of modules, such as "EZSignal" which is a custom DOD native event system built for this engine
 	and other uses.
 
 	- This engine is built with both OOP and DOD in mind, you can choose which paradigm you want to use by changing the "paradigmMode"
@@ -48,6 +45,9 @@
 	optimize and structure code in roblox along the way, and I hope to continue improving and updating the engine as I learn more and as roblox
 	updates and changes.
 ]]
+--!strict
+--!native
+--!optimize 2
 -- [ SERVICES ]
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -210,7 +210,12 @@ local EZNSettings = {
 	isWallyVersion = false, -- Whether this version of the engine is a wally version, used for update checking. Default [false] (I BEG YALL DO NOT CHANGE THIS TO TRUE UNLESS YOU KNOW WHAT YOU ARE DOING)
 	isFork = false, -- Whether this version of the engine is a fork, used for update checking. Default [false] (AGAIN I BEG YALL DO NOT CHANGE THIS TO TRUE UNLESS YOU KNOW WHAT YOU ARE DOING)
 	-- [ Signal Settings ]
-	yeildTime = 0.2,
+	yeildTime = 0.2, -- How long does the signal system poll for (EZNetV2 does not use poll based async by default)
+	--[ Packet Receive settings ]
+	performPacketIntegrityChecks = true, -- Good for security but SLOWER processing speed
+	performKickOnInvalidPacketInStudio = false, -- Kicks player when a invalid packet is detected in studio
+	-- [ EZNet handling ]
+	preferInstanceHandling = false, -- Determines if EZNet will handle instances like regular remote events or EZNet style (EZNet might be more client authoritive here.)
 }
 type EZNet_TypeMode = EZN_VersionDOD -- By changing this to either "EZN_VersionDOD" or "EZN_VersionOOP" you can allow type annotations t, Default ["EZN_VersionDOD"]
 
@@ -224,6 +229,9 @@ local GlobalMemory = {
 	NameMap = {} :: { [string]: number },
 	Channels = {} :: { [string]: BaseRemoteEvent },
 	_RemoteEventConnections = {} :: { [string]: { RBXScriptConnection } },
+	_ConnectedPlayers = {} :: { number },
+	_isFreeRunning = false,
+	_packetToProcess = {} :: { buffer },
 }
 
 -- [ Variables ]
@@ -475,6 +483,78 @@ function ezsignal.fireSignalAsync(Name: string, ...)
 end
 
 -- [ ENGINE ]
+
+--[=[
+	Handles the engines packets integrity checks
+]=]
+local function perfromPacketIntegrityCheck(player: Player, args: { n: number, [number]: any })
+	if args["n"] > 2 then
+		return false
+	end
+	if args[2] and typeof(args[2]) ~= "table" then
+		return false
+	end
+	if args[2] and typeof(args[2]) == "table" then
+		for i, InstanceId in args[2] do
+			if typeof(i) ~= "number" then
+				return false
+			end
+			if typeof(InstanceId) ~= "string" then
+				return false
+			end
+		end
+	end
+	if typeof(args[1]) ~= "buffer" then
+		return false
+	end
+
+	-- Variables
+	local packetId = buffer.readu8(args[1], 0) + 1
+	local packetMemoryInfo = GlobalMemory.Packets[packetId]
+
+	if not packetMemoryInfo then
+		return false
+	end
+	if table.find(packetMemoryInfo.blockedPlayers, player.UserId) then
+		return false
+	end
+	if not table.find(GlobalMemory._ConnectedPlayers, player.UserId) then
+		warn(`[EZNet][Validation] - Player {player} is not connected.`)
+		return false
+	end
+
+	-- add the other memory size checks here!
+
+	return true
+end
+
+--[=[
+	Decodes the packet for EZNet
+]=]
+local function performPacketBufferDecoding(args: { n: number, [number]: any })
+	local packetId = buffer.readu8(args[1], 0) + 1
+	local packetMemoryInfo = GlobalMemory.Packets[packetId]
+
+	print(packetMemoryInfo, args[2] or {})
+end
+
+--[=[
+	Handles the remote events server connection things idk
+]=]
+local function handleServerRemoteEvents(player: Player, ...)
+	if EZNSettings.performPacketIntegrityChecks then
+		local didPacketPassCheck = perfromPacketIntegrityCheck(player, table.pack(...))
+		if not didPacketPassCheck and not RunService:IsStudio() then
+			player:Kick(`EZNet was unable to handle a malformed packet, client has initiated disconnect.`)
+			return
+		elseif not didPacketPassCheck and not EZNSettings.performKickOnInvalidPacketInStudio then
+			warn(`[EZNet][Sandbox] - EZNet was unable to handle a malformed packet, client has initiated disconnect.`)
+			return
+		end
+	end
+	performPacketBufferDecoding(table.pack(...))
+end
+
 --[=[
 	Constructs the object and stores it in memory, returns the data object.
 
@@ -482,7 +562,7 @@ end
 
 	@param name: string
 	@param enabled: boolean | EZN_PacketData
-	@param channel: string | BaseRemoteEvent
+	@param channel: string | BaseRemoteEvent.
 	@param types: { string }?
 		
 	@return object
@@ -556,18 +636,19 @@ local function constructChannel(name: string, unreliable: boolean)
 		return
 	end
 
-	local channel: BaseRemoteEvent
+	local channel: RemoteEvent
 
 	if not unreliable then
 		channel = Instance.new("RemoteEvent")
 		channel.Name = name
 		channel.Parent = ChannelStore
 	else
-		channel = Instance.new("UnreliableRemoteEvent")
+		channel = Instance.new("UnreliableRemoteEvent") :: any
 		channel.Name = name
 		channel.Parent = ChannelStore
 	end
 
+	GlobalMemory._RemoteEventConnections[name] = channel.OnServerEvent:Connect(handleServerRemoteEvents)
 	GlobalMemory.Channels[name] = channel
 	Utils.print("Constructed channel with identity: " .. name)
 end
@@ -715,6 +796,21 @@ local function InitalizeFramework()
 	if EZNSettings.checkForUpdates then
 		Utils.checkForUpdates()
 	end
+
+	-- Variables
+	local UtilityRemote = Instance.new("RemoteEvent")
+	UtilityRemote.Name = "EZNet_Utlis"
+	UtilityRemote.Parent = ReplicatedStorage
+
+	UtilityRemote.OnServerEvent:Connect(function(player: Player, isResync: boolean, Id: number)
+		if isResync and GlobalMemory.Packets[Id] then
+			local PacketMemoryInfo = GlobalMemory.Packets[Id]
+			print(PacketMemoryInfo)
+		elseif not isResync then
+			table.insert(GlobalMemory._ConnectedPlayers, player.UserId)
+			print(player, "Connected!")
+		end
+	end)
 end
 
 --[[
