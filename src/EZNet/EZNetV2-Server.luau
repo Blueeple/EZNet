@@ -3,47 +3,6 @@
 	You can customize settings and change how the core engine works here and modify it yourself!
 
 	Built and scripted by @Blueeple (Bue) on github / RBLX
-
-	Notices:
-	- This is a custom networking framework I fear that calling this a library is a bad idea since it is more of a framework, so I call it an framework.
-	It is built from the ground up with custom code and does not use any external libraries or modules, unless said module is 
-	made by me or apart of the "EZ" libary of modules, such as "EZSignal" which is a custom DOD native event system built for this engine
-	and other uses.
-
-	- This engine is built with both OOP and DOD in mind, you can choose which paradigm you want to use by changing the "paradigmMode"
-	setting below, and the engine will adapt to that paradigm and allow you to use type annotations for that paradigm as well.
-
-	- The engine is built with a custom memory management system that allows for efficient storage and retrieval of packet data, channels, 
-	and other necessary information for the engine to function.
-
-	- The engine also has a custom update checking system that checks for updates on the github repository and warns the user if there is 
-	an update available.
-
-	- I have no clue if this engine will be used by anyone other than myself, but if you do end up using it, please credit me and consider
-	contributing to the project if you have any ideas or improvements!
-
-	- This is all part of my spitefull mission to make a better blink networking library or atleast be on par with 1Axen's blink library, 
-	which is the most popular roblox networking library while also being more customizable and easier to use, and also to learn more about 
-	how networking works in roblox and how to optimize it as much as possible.
-
-	- Born out of pure rage and frustration with blink's type warning due to it's IDL compiler and the fact that it can't be easily modified
-	 or customized without forking the entire library and maintaining your own version, which is a nightmare to do since it's codebase is so
-	large and complex, and also due to the fact that it has a lot of features that I personally find unnecessary and bloated for my use case.
-
-	- Can't forget the part where blink can't even send instances without having them be created and parented to the workspace first, which is
-	a huge pain and also a security risk if you ask me, since it can lead to exploits if not used carefully.
-
-	- Thanks you for reading this far, I hope you enjoy using EZNet as much as I enjoyed making it, and I hope it serves you well in your projects!
-	although I highly doubt it will even be good enough to be used by anyone other than myself, but hey, maybe someone will find it useful or learn 
-	something from it, who knows!
-
-	- A little fun fact EZNet was originally called RMv which means RemoteManager version, but I changed the name to EZNet since I felt it was more
-	fitting and also sounded cooler, and also to avoid confusion with other remote management libraries that are already out there.
-
-	- Also EZNet started development in late 2024 around december where the first version was just a simple wrapper around remote events with no 
-	memory management or anything, and it has evolved a lot since then to become the engine it is today, and I have learned a lot about how to 
-	optimize and structure code in roblox along the way, and I hope to continue improving and updating the engine as I learn more and as roblox
-	updates and changes.
 ]]
 --!strict
 --!native
@@ -62,6 +21,11 @@ type object = {
 	types: { string },
 	blockedPlayers: { number },
 }
+type ezConnection = {
+	func: (...any) -> (),
+	once: boolean?,
+}
+type listener = { ezConnection }
 type EZN_PacketData = {
 	name: string,
 	channel: BaseRemoteEvent,
@@ -216,22 +180,29 @@ local EZNSettings = {
 	performKickOnInvalidPacketInStudio = false, -- Kicks player when a invalid packet is detected in studio
 	-- [ EZNet handling ]
 	preferInstanceHandling = false, -- Determines if EZNet will handle instances like regular remote events or EZNet style (EZNet might be more client authoritive here.)
+	typeModuleLocation = ReplicatedStorage,
 }
 type EZNet_TypeMode = EZN_VersionDOD -- By changing this to either "EZN_VersionDOD" or "EZN_VersionOOP" you can allow type annotations t, Default ["EZN_VersionDOD"]
 
 -- [ Memory ]
 local currentVersion = "0.1.0dev" -- The current version of the engine, used for update checking. (NO NOT CHANGE THIS UNLESS YOU KNOW WHAT YOU ARE DOING)
-local ezsignal = {}
-ezsignal._listeners = {} :: { [string]: { Connection } }
-ezsignal._functionMap = {} :: { [() -> ()]: { string } }
 local GlobalMemory = {
 	Packets = {} :: { [number]: object },
 	NameMap = {} :: { [string]: number },
+	Types = { {} },
+	NameToTypeMap = {} :: { [string]: number },
 	Channels = {} :: { [string]: BaseRemoteEvent },
 	_RemoteEventConnections = {} :: { [string]: { RBXScriptConnection } },
 	_ConnectedPlayers = {} :: { number },
 	_isFreeRunning = false,
 	_packetToProcess = {} :: { buffer },
+}
+local EmbeddedSignal = {
+	_functionCahce = {} :: { [string]: (...any) -> any? },
+	_listeners = {} :: { [string]: listener },
+	_FireLater = {} :: { [string]: { n: number, [number]: (...any) -> any? } },
+	_BindLater = {} :: { [string]: { ezConnection } },
+	_G = {},
 }
 
 -- [ Variables ]
@@ -302,6 +273,40 @@ local Utils = {
 		ChannelStore.Parent = ReplicatedStorage
 	end,
 	--[=[
+		Converts a packet into a buffer for sync
+	]=]
+	packetToBuffer = function(Id: number): buffer
+		local packet = GlobalMemory.Packets[Id]
+		if not packet then
+			warn(`[{script.Name}] - Unable to find packet of id: {Id}`)
+			return nil :: any
+		end
+
+		local bufferMult = 1
+		if #EZNSettings.typeModuleLocation:GetChildren() > 255 then
+			bufferMult = 2
+		end
+
+		local bufferSize = (2 + string.len(packet.name) + (#packet.types * bufferMult))
+		local compressedPacket = buffer.create(bufferSize)
+
+		buffer.writeu8(compressedPacket, 0, packet.id)
+		for i = 1, #packet.types do
+			local typeName = packet.types[i]
+			local typeId = GlobalMemory.NameToTypeMap[typeName]
+
+			if bufferMult == 1 then
+				buffer.writeu8(compressedPacket, i, typeId)
+			else
+				buffer.writeu16(compressedPacket, (i + 1), typeId)
+			end
+		end
+		buffer.writeu8(compressedPacket, (#packet.types * bufferMult), 0)
+		buffer.writestring(compressedPacket, (#packet.types * bufferMult) + 1, packet.name)
+
+		return compressedPacket
+	end,
+	--[=[
 		Reads the engine's memory and prints it to the console.
 	]=]
 	readEngineMemory = function()
@@ -314,175 +319,190 @@ local Utils = {
 	]=]
 	readSignalMemory = function()
 		if EZNSettings.debugMode then
-			print(ezsignal)
+			print(EmbeddedSignal)
 		end
 	end,
 }
--- [ EZSignal EMBEDDED CODE ]
-function ezsignal.newSignal(Name: string)
-	if ezsignal._listeners[Name] then
-		warn(`[{script.Name}] - listener {Name} already exists!`)
-		return false
-	end
-
-	ezsignal._listeners[Name] = {}
-	return true
-end
-
-function ezsignal.destroy(Name: string)
-	local listeners = ezsignal._listeners[Name]
-
-	if not listeners then
-		warn(`[{script.Name}] - listener {Name} does not exist!`)
-		return
-	end
-
-	for _, connection in listeners do
-		connection.Connected = false
-
-		local map = ezsignal._functionMap[connection._function]
-		if map then
-			local index = table.find(map, Name)
-			if index then
-				table.remove(map, index)
-			end
-
-			if #map == 0 then
-				ezsignal._functionMap[connection._function] = nil
-			end
-		end
-	end
-
-	ezsignal._listeners[Name] = nil
-end
-
-function ezsignal.bindToSignal(Name: string, _func: (...any) -> any, once: boolean?)
-	local listener = ezsignal._listeners[Name]
-
-	if not listener then
-		error(`[{script.Name}] - listener {Name} does not exist!`)
-	end
-
-	local connection: Connection = {
-		Connected = true,
-		_isOnce = once or false,
-		_function = _func,
-	}
-
-	local map = ezsignal._functionMap[_func]
-
-	if not map then
-		map = {}
-		ezsignal._functionMap[_func] = map
-	end
-
-	table.insert(listener, connection)
-	table.insert(map, Name)
-
-	return connection
-end
-
-function ezsignal.bindToSignalAsync(Name: string, _func: () -> (), once: boolean?)
-	local start = os.clock()
-
-	while not ezsignal._listeners[Name] do
-		if os.clock() - start > EZNSettings.yeildTime then
-			error(`[{script.Name}] - yeild passed for listener {Name}`)
-		end
-
-		task.wait()
-	end
-
-	return ezsignal.bindToSignal(Name, _func, once)
-end
-
-function ezsignal.unbindFromSignal(Name: string, _func: () -> (), unbindAll: boolean?)
-	local listener = ezsignal._listeners[Name]
-	local map = ezsignal._functionMap[_func]
-
-	if not listener or not map then
-		return
-	end
-
-	for i = #listener, 1, -1 do
-		local connection = listener[i]
-
-		if connection._function == _func then
-			connection.Connected = false
-			table.remove(listener, i)
-
-			local idx = table.find(map, Name)
-			if idx then
-				table.remove(map, idx)
-			end
-
-			if not unbindAll then
-				break
-			end
-		end
-	end
-
-	if #map == 0 then
-		ezsignal._functionMap[_func] = nil
-	end
-end
-
-function ezsignal.fireSignal(Name: string, ...)
-	local listener = ezsignal._listeners[Name]
-
-	if not listener then
-		warn(`[{script.Name}] - listener {Name} does not exist!`)
-		return
-	end
-
-	for i = #listener, 1, -1 do
-		local connection = listener[i]
-		local listenerIndex = table.find(ezsignal._functionMap[connection._function], Name)
-
-		if connection.Connected then
-			task.spawn(connection._function, ...)
-			if connection._isOnce and listenerIndex then
-				table.remove(listener, i)
-				table.remove(ezsignal._functionMap[connection._function], listenerIndex)
-			end
-		end
-	end
-end
-
-function ezsignal.fireSignalAsync(Name: string, ...)
-	local listener = nil
-	local lastYeild = os.clock()
-	local yeildTime = 0
-
-	repeat
-		listener = ezsignal._listeners[Name]
-		yeildTime += (os.clock() - lastYeild)
-		lastYeild = os.clock()
-		task.wait()
-	until (yeildTime > EZNSettings.yeildTime) or listener
-
-	if listener then
-		for i = #listener, 1, -1 do
-			local connection = listener[i]
-			local listenerIndex = table.find(ezsignal._functionMap[connection._function], Name)
-
-			if connection.Connected then
-				task.spawn(connection._function, ...)
-				if connection._isOnce and listenerIndex then
-					table.remove(listener, i)
-					table.remove(ezsignal._functionMap[connection._function], listenerIndex)
-				end
-			end
-		end
-
-		return
-	else
-		warn(`[{script.Name}] - yeild passed for listener {Name}`)
-		return
-	end
-end
 
 -- [ ENGINE ]
+local function DispatchFunctions(connectionTable: { ezConnection }, ...)
+	for i = #connectionTable, 1, -1 do
+		local connection = connectionTable[i]
+		task.spawn(connection.func, ...)
+		if connection.once then
+			table.remove(connectionTable, i)
+		end
+	end
+end
+
+-- [ EZSignal EMBEDDED CODE ]
+local EZSignal = {
+	newSignal = function(Name: string)
+		if EmbeddedSignal._listeners[Name] then
+			warn(`[{script.Name}] - listener {Name} already exists!`)
+			return nil :: any
+		end
+
+		EmbeddedSignal._listeners[Name] = {
+			Connections = {},
+		} :: listener
+		if EmbeddedSignal._BindLater[Name] then
+			EmbeddedSignal._listeners[Name] = EmbeddedSignal._BindLater[Name]
+			EmbeddedSignal._BindLater[Name] = nil
+		end
+		if EmbeddedSignal._FireLater[Name] then
+			DispatchFunctions(EmbeddedSignal._listeners[Name], table.unpack(EmbeddedSignal._FireLater[Name]))
+			EmbeddedSignal._FireLater[Name] = nil
+		end
+
+		return Name
+	end,
+
+	destroy = function(Name: string)
+		local listeners = EmbeddedSignal._listeners[Name]
+
+		if not listeners then
+			warn(`[{script.Name}] - listener {Name} does not exist!`)
+			return
+		end
+
+		EmbeddedSignal._listeners[Name] = nil
+	end,
+
+	bindToSignal = function(Name: string, _func: (...any) -> any?, once: boolean?)
+		local listener = EmbeddedSignal._listeners[Name]
+		local funcKey = tostring(_func)
+
+		if not listener then
+			error(`[{script.Name}] - listener {Name} does not exist!`)
+		end
+
+		if not EmbeddedSignal._functionCahce[funcKey] then
+			EmbeddedSignal._functionCahce[funcKey] = _func
+		end
+
+		for _, connection in listener do
+			if connection.func == _func then
+				warn(`[{script.Name}] - Cannot bind duplicate function {_func} to same signal {Name}`)
+				return listener
+			end
+		end
+
+		table.insert(listener, {
+			func = _func,
+			once = once,
+		})
+
+		return listener
+	end,
+
+	bindToSignalPoll = function(Name: string, _func: (...any) -> any?, once: boolean?)
+		local library = EmbeddedSignal._G :: any
+		local start = os.clock()
+
+		while not EmbeddedSignal._listeners[Name] do
+			if os.clock() - start > EZNSettings.yeildTime then
+				error(`[{script.Name}] - yeild passed for listener {Name}`)
+			end
+			task.wait()
+		end
+
+		return library.bindToSignal(Name, _func, once) :: any
+	end,
+
+	bindToSignalAsync = function(Name: string, _func: (...any) -> (), once: boolean?, YeildTime: number?)
+		if not EmbeddedSignal._BindLater[Name] then
+			EmbeddedSignal._BindLater[Name] = {}
+		end
+
+		task.spawn(function()
+			task.wait(YeildTime or EZNSettings.yeildTime)
+			if next(EmbeddedSignal._BindLater) then
+				for yeildedName, _ in EmbeddedSignal._BindLater do
+					warn(`[{script.Name}] - Infinite yeild possible on Signal: {yeildedName}`)
+				end
+				EmbeddedSignal._BindLater[Name] = nil
+			end
+		end)
+
+		local bind = EmbeddedSignal._BindLater[Name]
+
+		for _, connection in bind do
+			if connection.func == _func then
+				connection.once = connection.once or once
+				return
+			end
+		end
+
+		table.insert(bind, {
+			func = _func,
+			once = once,
+		})
+	end,
+
+	unbindFromSignal = function(func: () -> (), listenerName: string)
+		local listener = EmbeddedSignal._listeners[listenerName]
+
+		if not listener then
+			warn(`[{script.Name}] - Unable to find listener of Name: {listenerName}`)
+			return
+		end
+
+		for index, ConnectionDetails in listener do
+			if ConnectionDetails.func == func then
+				table.remove(listener, index)
+				return
+			end
+		end
+	end,
+
+	fireSignal = function(Name: string, ...)
+		local listener = EmbeddedSignal._listeners[Name]
+
+		if not listener then
+			warn(`[{script.Name}] - listener {Name} does not exist!`)
+			return
+		end
+
+		DispatchFunctions(listener, ...)
+	end,
+
+	fireSignalPoll = function(Name: string, ...)
+		local listener = nil
+		local lastYeild = os.clock()
+		local yeildTime = 0
+
+		repeat
+			listener = EmbeddedSignal._listeners[Name]
+			yeildTime += (os.clock() - lastYeild)
+			lastYeild = os.clock()
+			task.wait()
+		until (yeildTime > EZNSettings.yeildTime) or listener
+
+		if listener then
+			DispatchFunctions(listener, ...)
+		else
+			warn(`[{script.Name}] - yeild passed for listener {Name}`)
+		end
+	end,
+
+	fireSignalAsync = function(Name: string, ...)
+		if not EmbeddedSignal._FireLater[Name] then
+			EmbeddedSignal._FireLater[Name] = table.pack(...)
+		end
+
+		task.spawn(function()
+			task.wait(EZNSettings.yeildTime)
+			if next(EmbeddedSignal._FireLater) then
+				for yeildedName, _ in EmbeddedSignal._FireLater do
+					warn(`[{script.Name}] - Infinite yeild possible on Signal: {yeildedName}`)
+				end
+				EmbeddedSignal._FireLater[Name] = nil
+			end
+		end)
+	end,
+}
+EmbeddedSignal._G = EZSignal
 
 --[=[
 	Handles the engines packets integrity checks
@@ -615,7 +635,7 @@ local function constructObject(name: string, enabled: boolean | EZN_PacketData, 
 		blockedPlayers = {},
 	}
 
-	ezsignal.newSignal(name .. "_Signal")
+	EZSignal.newSignal(name .. "_Signal")
 	table.insert(GlobalMemory.Packets, object)
 	GlobalMemory.NameMap[name] = packetId
 
@@ -709,11 +729,11 @@ end
 local function bindToPacketRecieve(identity: number | string, _func: (...any) -> ())
 	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
 		local signalName = GlobalMemory.Packets[identity].name .. "_Signal"
-		ezsignal.bindToSignal(signalName, _func)
+		EZSignal.bindToSignal(signalName, _func)
 	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
 		local id = GlobalMemory.NameMap[identity]
 		local signalName = GlobalMemory.Packets[id].name .. "_Signal"
-		ezsignal.bindToSignal(signalName, _func)
+		EZSignal.bindToSignal(signalName, _func)
 	end
 end
 
@@ -726,11 +746,11 @@ end
 local function bindToPacketRecieve_Once(identity: number | string, _func: (...any) -> ())
 	if typeof(identity) == "number" and GlobalMemory.Packets[identity] then
 		local signalName = GlobalMemory.Packets[identity].name .. "_Signal"
-		ezsignal.bindToSignal(signalName, _func, true)
+		EZSignal.bindToSignal(signalName, _func, true)
 	elseif typeof(identity) == "string" and GlobalMemory.NameMap[identity] then
 		local id = GlobalMemory.NameMap[identity]
 		local signalName = GlobalMemory.Packets[id].name .. "_Signal"
-		ezsignal.bindToSignal(signalName, _func, true)
+		EZSignal.bindToSignal(signalName, _func, true)
 	end
 end
 
@@ -757,6 +777,9 @@ local methods = {
 		unblockPlayer = unblockPlayer,
 		bindTo = bindToPacketRecieve,
 		bindToOnce = bindToPacketRecieve_Once,
+		firePlayer = nil,
+		fireAll = nil,
+		fireGroup = nil,
 	} :: EZN_VersionDOD,
 }
 methods.object.__index = methods.object -- This is what sets up the standard OOP __index metamethod for luau
@@ -814,7 +837,7 @@ local function InitalizeFramework()
 end
 
 --[[
-	This is what allows EZNet to support both OOP and DOD by architecture.
+	This is what allows EZNet to switch paragdims based on settings and what you have in the "paragdimConsts" table.
 ]]
 if paragdimConsts[string.lower(EZNSettings.paradigmMode)] then
 	task.spawn(InitalizeFramework)
